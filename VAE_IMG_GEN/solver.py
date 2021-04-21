@@ -413,7 +413,7 @@ class Solver(object):
         all_zs_lt_epsilon = torch.zeros(epsilons_size,self.z_dim).to(epsilons.device)
 
         for x in self.data_loader:
-            if not args.is_classification:
+            if not self.args.is_classification:
                 x, _ = x
             batch += 1
             x = Variable(cuda(x, self.use_cuda))
