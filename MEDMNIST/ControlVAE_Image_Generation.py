@@ -1,3 +1,12 @@
+######################
+# Original authors: Huajie Shao, Shuochao Yao, Dachun Sun, Aston Zhang, Shengzhong Liu,
+#                   Dongxin Liu, Jun Wang, Tarek Abdelzaher
+# Title: ControlVAE: Controllable Variational Autoencoder
+# Source code location: https://github.com/shj1987/ControlVAE-ICML2020
+#
+# Modified for CSC412 course project
+######################
+
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -184,10 +193,6 @@ class BetaVAE_H(nn.Module):
         self.is_classification = is_classification
         self.num_classes = num_classes
 
-        # if is_classification:
-        #     self.fc = nn.Linear(z_dim*2, num_classes)
-        # else:
-        #     self.fc = None
         self.weight_init()
 
     def weight_init(self):
@@ -414,6 +419,7 @@ class Solver(object):
         self.gather = DataGather()
         self.gather2 = DataGather()
         
+        self.delta = args.delta
 
     def train(self):
         self.net_mode(train=True)
@@ -438,7 +444,7 @@ class Solver(object):
             for x in self.data_loader:
                 if not args.is_classification:
                     x, _ = x
-                print('shape>>', x.size())
+                #print('shape>>', x.size())
                 self.global_iter += 1
                 pbar.update(1)
 
@@ -519,7 +525,9 @@ class Solver(object):
         if self.save_output:
             output_dir = os.path.join(self.output_dir, str(self.global_iter))
             os.makedirs(output_dir, exist_ok=True)
-            save_image(tensor=images, filename=os.path.join(output_dir, 'recon.jpg'), pad_value=1)
+            save_image(tensor=images, fp=os.path.join(output_dir, 'recon.jpg'), pad_value=1)
+
+            #save_image(tensor=images, filename=os.path.join(output_dir, 'recon.jpg'), pad_value=1)
         self.net_mode(train=True)
         
 
@@ -706,7 +714,7 @@ class Solver(object):
                                 opts=dict(title=title), nrow=num_image)
             ## save image to folder
             if self.save_output:
-                save_image(samples, filename=os.path.join(output_dir, '{}_{}.jpg'.format(key, self.global_iter)), \
+                save_image(samples, fp=os.path.join(output_dir, '{}_{}.jpg'.format(key, self.global_iter)), \
                             nrow=num_image, pad_value=1)
         ###-------interplote linear space----------
 
@@ -734,23 +742,53 @@ class Solver(object):
         ids = 0
         batch = 0
         num_image = 5
+
+        epsilons = Variable(cuda(torch.arange(0, 1, 0.01), self.use_cuda))
+        epsilons_size = epsilons.size(0)
+        rep_epsilons = epsilons.view(epsilons_size, 1).repeat(1, self.z_dim)
+
+        all_zs_lt_epsilon = torch.zeros(epsilons_size,self.z_dim).to(epsilons.device)
+
         for x in self.data_loader:
             if not args.is_classification:
                 x, _ = x
             batch += 1
             x = Variable(cuda(x, self.use_cuda))
-            x_recon, _, _ = self.net(x)
+            x_recon, mu, logvar = self.net(x)
+            recon_loss = reconstruction_loss(x, x_recon, self.decoder_dist)
+            total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar) # dim_wise_kld dim = z_dim
+
+            zs_lt_epsilon = dim_wise_kld.repeat(epsilons_size, 1) < rep_epsilons
+
+            all_zs_lt_epsilon += zs_lt_epsilon
+            #print(f'dim wise kld size {dim_wise_kld.size()}')
+
             samples = F.sigmoid(x_recon).data
             batch_size = samples.size(0)
-            # save_image(samples, filename=os.path.join(image_path[0], 'recontruct_{}.eps'.format(batch)),nrow=num_image,pad_value=1)
-            # save_image(x, filename=os.path.join(image_path[1], 'recontruct_{}.eps'.format(batch)),nrow=num_image,pad_value=1)
-            # if batch >= 10:
-            #     break
+
             for b in range(batch_size):
                 ids += 1
-                save_image(samples[b,:,:,:], filename=os.path.join(image_path[0], 'predict_{}.jpg'.format(ids)))
-                save_image(x[b,:,:,:], filename=os.path.join(image_path[1], 'ground_{}.jpg'.format(ids)))
-                
+                save_image(samples[b,:,:,:], fp=os.path.join(image_path[0], 'predict_{}.jpg'.format(ids)))
+                save_image(x[b,:,:,:], fp=os.path.join(image_path[1], 'ground_{}.jpg'.format(ids)))
+        
+        prop_lt_epsilon = torch.div(all_zs_lt_epsilon, batch)
+        collapsed = prop_lt_epsilon >= self.delta
+        prop_collapsed = torch.div(torch.sum(collapsed, dim=1), self.z_dim)
+
+        # Plot epsilon delta collapse graph for various epsilons
+        output_dir = os.path.join(self.output_dir, 'delta_epsilon_collapse')
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+    
+        fig = plt.figure(figsize=(10, 10), dpi=300)
+        epsilons = epsilons.cpu().detach().numpy()
+        prop_collapsed = prop_collapsed.view(epsilons_size,).cpu().detach().numpy()
+
+        plt.plot(epsilons, prop_collapsed)
+        plt.xlabel('epsilon')
+        plt.ylabel('collapse %')
+        plt.title('Posterior collapse')
+        fig.savefig(os.path.join(output_dir, 'graph_delta_epsilon_collapse_percentage.jpg')) 
     
     def net_mode(self, train):
         if not isinstance(train, bool):
@@ -874,11 +912,12 @@ if __name__ == "__main__":
     parser.add_argument('--ckpt_dir', default='checkpoints', type=str, help='checkpoint directory')
     parser.add_argument('--ckpt_name', default='last', type=str, help='load previous checkpoint. insert checkpoint filename')
     parser.add_argument('--is_classification', default=False, type=bool, help='whether we are doing classification')
+    parser.add_argument('--delta', default=0.01, type=float, help='delta used when testing for posterior collapse using the delta epsilon')
 
 
-    args = parser.parse_args("--train True --viz_on True --dataset medmnist --seed 1 --lr 1e-4 --beta1 0.9 --beta2 0.999 \
-    --objective H --model H --batch_size 16 --z_dim 500 --max_iter 20 \
-    --beta 1 --is_PID False --KL_loss 200 --image_size 128 \
-    --save_step 10 --gather_step 10 --display_step 10".split())
+    args = parser.parse_args("--train False --viz_on True --dataset medmnist --seed 1 --lr 1e-4 --beta1 0.9 --beta2 0.999 \
+    --objective H --model H --batch_size 16 --z_dim 500 --max_iter 1500 \
+    --beta 1 --is_PID True --KL_loss 200 --image_size 128 \
+    --save_step 500 --gather_step 15 --display_step 15".split())
     
     main(args)
