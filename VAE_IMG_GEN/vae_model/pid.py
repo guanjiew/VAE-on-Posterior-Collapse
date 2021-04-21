@@ -1,13 +1,13 @@
 import math
 
-__all__ = ['controlvae']
+__all__ = ['pid']
 
 
 def _Kp_fun(Err, scale=1):
     return 1.0 / (1.0 + float(scale) * math.exp(Err))
 
 
-class ControlVAE:
+class PID:
     def __init__(self):
         self.I_k1 = 0.0
         self.W_k1 = 0.0
@@ -43,10 +43,10 @@ class ControlVAE:
         return Wk, error_k
 
 
-def controlvae():
+def pid():
     """
     Constructs a Control VAE model.
     """
-    return ControlVAE()
+    return PID()
 
 

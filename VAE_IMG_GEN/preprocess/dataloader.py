@@ -1,7 +1,7 @@
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
-from med_dataset import PathMNIST
+from preprocess.med_dataset import PathMNIST
 import os
 
 
