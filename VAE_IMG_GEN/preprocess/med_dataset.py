@@ -2,7 +2,7 @@ import os
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
-from control_vae_gen_img.MEDEMNIST_INFO.info import INFO
+from info import INFO
 
 
 class MedMNIST(Dataset):
