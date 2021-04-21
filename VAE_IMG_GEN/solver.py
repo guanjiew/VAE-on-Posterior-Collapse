@@ -193,7 +193,7 @@ class Solver(object):
         if self.save_output:
             output_dir = os.path.join(self.output_dir, str(self.global_iter))
             os.makedirs(output_dir, exist_ok=True)
-            save_image(tensor=images, filename=os.path.join(output_dir, 'recon.jpg'), pad_value=1)
+            save_image(tensor=images, fp=os.path.join(output_dir, 'recon.jpg'), pad_value=1)
         self.net_mode(train=True)
 
     def viz_lines(self):
@@ -374,14 +374,14 @@ class Solver(object):
                                 opts=dict(title=title), nrow=num_image)
             ## save image to folder
             if self.save_output:
-                save_image(samples, filename=os.path.join(output_dir, '{}_{}.jpg'.format(key, self.global_iter)), \
+                save_image(samples, fp=os.path.join(output_dir, '{}_{}.jpg'.format(key, self.global_iter)), \
                            nrow=num_image, pad_value=1)
         ###-------interplote linear space----------
 
         self.net_mode(train=True)
 
     def _test_model(self):
-        print('****** Start testing model ****')
+        print('******--testing model now--****')
         if self.is_PID:
             result_dir_name = 'results-ControlVAE'
         else:
@@ -389,33 +389,73 @@ class Solver(object):
         test_path = os.path.join(result_dir_name, self.model_name)
         if not os.path.exists(test_path):
             os.makedirs(test_path)
-        predict_path = os.path.join(test_path, 'prediction')
-        ground_path = os.path.join(test_path, 'ground_truth')
+
+        predict_path = os.path.join(test_path, 'testing/predict-25')
+        ground_path = os.path.join(test_path, 'ground/ground_truth-25')
         image_path = [predict_path, ground_path]
 
         for path in image_path:
             if not os.path.exists(path):
                 os.makedirs(path)
-        # evaluate the result
+        ## evaluate the result
         self.net_mode(train=False)
         ids = 0
         batch = 0
         num_image = 5
+
+        outfile = os.path.join(test_path, "test.log")
+        fw_log = open(outfile, "w")
+
+        epsilons = Variable(cuda(torch.arange(0, 1, 0.01), self.use_cuda))
+        epsilons_size = epsilons.size(0)
+        rep_epsilons = epsilons.view(epsilons_size, 1).repeat(1, self.z_dim)
+
+        all_zs_lt_epsilon = torch.zeros(epsilons_size,self.z_dim).to(epsilons.device)
+
         for x in self.data_loader:
-            if not self.args.is_classification:
+            if not args.is_classification:
                 x, _ = x
             batch += 1
             x = Variable(cuda(x, self.use_cuda))
-            x_recon, _, _ = self.net(x)
-            samples = torch.sigmoid(x_recon).data
+            x_recon, mu, logvar = self.net(x)
+            recon_loss = reconstruction_loss(x, x_recon, self.decoder_dist)
+            total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar) # dim_wise_kld dim = z_dim
+
+            fw_log.write('recon_loss:{:.3f} total_kld:{:.3f} mean_kld:{:.3f}\n'.format(
+                            recon_loss.item(), total_kld.item(), mean_kld.item()))
+            fw_log.flush()
+
+            zs_lt_epsilon = dim_wise_kld.repeat(epsilons_size, 1) < rep_epsilons
+            all_zs_lt_epsilon += zs_lt_epsilon
+
+            samples = F.sigmoid(x_recon).data
             batch_size = samples.size(0)
+
             for b in range(batch_size):
                 ids += 1
-                save_image(samples[b, :, :, :], fp=os.path.join(image_path[0], 'predict_{}.jpg'.format(ids)))
-                save_image(x[b, :, :, :], fp=os.path.join(image_path[1], 'ground_{}.jpg'.format(ids)))
+                save_image(samples[b,:,:,:], fp=os.path.join(image_path[0], 'predict_{}.jpg'.format(ids)))
+                save_image(x[b,:,:,:], fp=os.path.join(image_path[1], 'ground_{}.jpg'.format(ids)))
 
-        print('****** Image Saved Successfully *****')
-        print('****** End testing model *****')
+        fw_log.close()
+
+        prop_lt_epsilon = torch.div(all_zs_lt_epsilon, batch)
+        collapsed = prop_lt_epsilon >= self.delta
+        prop_collapsed = torch.div(torch.sum(collapsed, dim=1), self.z_dim)
+
+        # Plot epsilon delta collapse graph for various epsilons
+        output_dir = os.path.join(self.output_dir, 'delta_epsilon_collapse')
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        fig = plt.figure(figsize=(10, 10), dpi=300)
+        epsilons = epsilons.cpu().detach().numpy()
+        prop_collapsed = prop_collapsed.view(epsilons_size,).cpu().detach().numpy()
+
+        plt.plot(epsilons, prop_collapsed)
+        plt.xlabel('epsilon')
+        plt.ylabel('collapse %')
+        plt.title('Posterior collapse')
+        fig.savefig(os.path.join(output_dir, 'graph_delta_epsilon_collapse_percentage.jpg'))
 
     def net_mode(self, train):
         if not isinstance(train, bool):

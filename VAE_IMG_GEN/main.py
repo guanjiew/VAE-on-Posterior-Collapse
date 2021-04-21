@@ -20,6 +20,10 @@ if __name__ == "__main__":
         "--train True "
         "--vae_model betavaeh "
         "--beta 1 "
+        "--image_size 128 "
+        "--save_step 500 "
+        "--gather_step 15 "
+        "--max_iter 1500 "
         "--is_PID False ".split())
 
     naive_test_args = parser.parse_args(
@@ -35,9 +39,10 @@ if __name__ == "__main__":
         "--beta 1 "
         "--is_PID True "
         "--image_size 128 "
-        "--save_step 10 "
-        "--gather_step 10 "
-        " --display_step 10 ".split())
+        "--save_step 500 "
+        "--gather_step 15 "
+        "--max_iter 1500 "
+        "--display_step 10 ".split())
 
     pid_test_args = parser.parse_args(
         "--train False "
