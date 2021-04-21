@@ -7,6 +7,7 @@ import warnings
 from PIL import Image as im
 import os
 from tqdm import tqdm
+import visdom
 
 from torch.utils.data import Dataset, DataLoader
 from torchvision.datasets import ImageFolder, DatasetFolder
@@ -376,7 +377,7 @@ class Solver(object):
         self.win_mu = None
         self.win_var = None
         if self.viz_on:
-            self.viz = visdom.Visdom(port=self.viz_port, use_incoming_socket=False)
+            self.viz = visdom.Visdom(port=self.viz_port, use_incoming_socket=True)
 
         if args.is_PID:
             checkpt_dir_name = args.ckpt_dir + '-ControlVAE'
@@ -630,6 +631,11 @@ class Solver(object):
             output_dir = os.path.join(self.output_dir, str(self.global_iter))
             os.makedirs(output_dir, exist_ok=True)
             fig = plt.figure(figsize=(10, 10), dpi=300)
+            iters_2 = iters_2.cpu().detach().numpy()
+            recon_losses_2 = recon_losses_2.cpu().detach().numpy()
+            betas_2 = betas_2.cpu().detach().numpy()
+            klds_2 = klds_2.cpu().detach().numpy()
+
             plt.plot(iters_2, recon_losses_2)
             plt.xlabel('iteration')
             plt.title('reconsturction loss')
@@ -870,8 +876,9 @@ if __name__ == "__main__":
     parser.add_argument('--is_classification', default=False, type=bool, help='whether we are doing classification')
 
 
-    args = parser.parse_args("--train True --viz_on False --dataset medmnist --seed 1 --lr 1e-4 --beta1 0.9 --beta2 0.999 \
-    --objective H --model H --batch_size 16 --z_dim 500 --max_iter 2000 \
-    --beta 1 --is_PID False --KL_loss 200 --image_size 128".split())
+    args = parser.parse_args("--train True --viz_on True --dataset medmnist --seed 1 --lr 1e-4 --beta1 0.9 --beta2 0.999 \
+    --objective H --model H --batch_size 16 --z_dim 500 --max_iter 20 \
+    --beta 1 --is_PID False --KL_loss 200 --image_size 128 \
+    --save_step 10 --gather_step 10 --display_step 10".split())
     
     main(args)
