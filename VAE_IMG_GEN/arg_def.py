@@ -55,3 +55,4 @@ parser.add_argument('--display_step', default=10, type=int,
 parser.add_argument('--save_step', default=10, type=int,
                     help='number of iterations after which a checkpoint is saved')
 parser.add_argument('--delta', default=0.01, type=float, help='delta used for epsilon delta posterior collapse visualization')
+parser.add_argument('--aggressive', default=False, type=bool, help='whether the encoder is trained more aggressively than the decoder')

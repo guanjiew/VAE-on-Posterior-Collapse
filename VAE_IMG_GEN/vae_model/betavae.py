@@ -95,11 +95,6 @@ class BetaVAE(nn.Module):
 
         self.is_classification = is_classification
         self.num_classes = num_classes
-
-        # if is_classification:
-        #     self.fc = nn.Linear(z_dim*2, num_classes)
-        # else:
-        #     self.fc = None
         self.weight_init()
 
     def weight_init(self):

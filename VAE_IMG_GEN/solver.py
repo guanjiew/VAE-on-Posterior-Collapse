@@ -49,8 +49,13 @@ class Solver(object):
 
         # load vae_model
         self.net = cuda(net, self.use_cuda)
-        self.optim = optim.Adam(self.net.parameters(), lr=self.lr,
+        self.enc_optim = optim.Adam(self.net.encoder.parameters(), lr=self.lr,
                                 betas=(self.beta1, self.beta2))
+        self.dec_optim = optim.Adam(self.net.decoder.parameters(), lr=self.lr,
+                                betas=(self.beta1, self.beta2))
+
+        # self.optim = optim.Adam(self.net.parameters(), lr=self.lr,
+        #                         betas=(self.beta1, self.beta2))
 
         self.viz_name = args.viz_name
         self.viz_port = args.viz_port
@@ -113,8 +118,12 @@ class Solver(object):
         pbar = tqdm(total=self.max_iter)
         pbar.update(self.global_iter)
         outfile = os.path.join(self.ckpt_dir, "train.log")
+        agg_outfile = os.path.join(self.ckpt_dir, "agg_train.log")
         print('**** Start Logging ****')
         fw_log = open(outfile, "w")
+        if self.args.aggressive:
+            afw_log = open(agg_outfile, "w")
+
         if self.is_PID:
             PID = vae_model.__dict__["pid"]()
         Kp = 0.01
@@ -122,6 +131,9 @@ class Solver(object):
         Kd = 0.0
         fw_log.write("Kp:{0:.5f} Ki: {1:.6f}\n".format(Kp, Ki))
         fw_log.flush()
+
+        is_aggressive = self.args.aggressive
+
         while not out:
             for x in self.data_loader:
                 if not self.args.is_classification:
@@ -129,6 +141,32 @@ class Solver(object):
                 self.global_iter += 1
                 pbar.update(1)
                 x = Variable(cuda(x, self.use_cuda))
+
+                # Strengthen inference network: train encoder more aggressively than decoder
+                sub_iter = 1
+                while is_aggressive and sub_iter < 100:
+                    self.enc_optim.zero_grad()
+                    self.dec_optim.zero_grad()
+                    x_recon, mu, logvar = self.net(x)
+                    recon_loss = reconstruction_loss(x, x_recon, self.decoder_dist)
+                    total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
+                    if self.is_PID:
+                        self.beta, _ = PID.pid(self.KL_loss, total_kld.item(), Kp, Ki, Kd)
+                        beta_vae_loss = recon_loss + self.beta * total_kld
+                    else:
+                        beta_vae_loss = recon_loss + 1.0 * total_kld
+                    beta_vae_loss.backward()
+                    self.enc_optim.step()
+
+                    sub_iter += 1
+
+                    afw_log.write(
+                        '[Global iter:{}][sub iter:{}] beta_vae_loss:{:.3f} recon_loss:{:.3f} total_kld:{:.3f} mean_kld:{:.3f} beta:{:.4f}\n'.format(
+                            self.global_iter, sub_iter, beta_vae_loss.item(), recon_loss.item(), total_kld.item(),
+                            mean_kld.item(), self.beta))
+                    afw_log.flush()
+                    print(f'recon loss during sub iter {sub_iter}, global iter {self.global_iter}: {recon_loss}')
+
                 x_recon, mu, logvar = self.net(x)
                 recon_loss = reconstruction_loss(x, x_recon, self.decoder_dist)
                 total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
@@ -138,9 +176,24 @@ class Solver(object):
                 else:
                     beta_vae_loss = recon_loss + 1.0 * total_kld
                 # print(f'Reconstruction loss is:{beta_vae_loss}')
-                self.optim.zero_grad()
+                # self.optim.zero_grad()
+                self.enc_optim.zero_grad()
+                self.dec_optim.zero_grad()
                 beta_vae_loss.backward()
-                self.optim.step()
+                if not is_aggressive:
+                    self.enc_optim.step()
+                self.dec_optim.step()
+                #self.optim.step()
+
+                # Criteria from the paper for setting aggressive to False
+                # only if all training data has been processed
+                if is_aggressive:
+                    # TODO: replace criteria below with MUTUAL information --> using a validation data batch
+                    # according to paper, mutual info criteria was usually achieved around approx 5 epochs
+                    # running 6 here, at 6, the optimization doesnt lower loss by that much anymore
+                    if self.global_iter > 5:
+                        is_aggressive = False
+
                 if self.viz_on and self.global_iter % self.gather_step == 0:
                     self.gather.insert(iter=self.global_iter,
                                        mu=mu.mean(0).data, var=logvar.exp().mean(0).data,
@@ -362,13 +415,13 @@ class Solver(object):
             output_dir = os.path.join(self.output_dir, str(self.global_iter))
             os.makedirs(output_dir, exist_ok=True)
 
-        ## visulize image
+        ## visualize image
         Z_image = {'fixed_z': fixed_z, 'random_z': random_z}
 
         for key in Z_image.keys():
             z = Z_image[key]
             samples = torch.sigmoid(decoder(z)).data
-            ## visulize
+            ## visualize
             title = '{}_latent_traversal(iter:{})'.format(key, self.global_iter)
             if self.viz_on:
                 self.viz.images(samples, env=self.viz_name + '_traverse',
@@ -387,6 +440,7 @@ class Solver(object):
             result_dir_name = 'results-ControlVAE'
         else:
             result_dir_name = 'results'
+
         test_path = os.path.join(result_dir_name, self.model_name)
         if not os.path.exists(test_path):
             os.makedirs(test_path)
@@ -468,7 +522,9 @@ class Solver(object):
 
     def save_checkpoint(self, filename, silent=True):
         model_states = {'net': self.net.state_dict(), }
-        optim_states = {'optim': self.optim.state_dict(), }
+        #optim_states = {'optim': self.optim.state_dict(), }
+        enc_optim_states = {'enc_optim': self.enc_optim.state_dict(), }
+        dec_optim_states = {'dec_optim': self.dec_optim.state_dict(), }
         win_states = {'recon': self.win_recon,
                       'beta': self.win_beta,
                       'kld': self.win_kld,
@@ -477,7 +533,8 @@ class Solver(object):
         states = {'iter': self.global_iter,
                   'win_states': win_states,
                   'model_states': model_states,
-                  'optim_states': optim_states}
+                  'enc_optim_states': enc_optim_states,
+                  'dec_optim_states': dec_optim_states}
 
         file_path = os.path.join(self.ckpt_dir, filename)
         with open(file_path, mode='wb+') as f:
@@ -495,7 +552,9 @@ class Solver(object):
             self.win_var = checkpoint['win_states']['var']
             self.win_mu = checkpoint['win_states']['mu']
             self.net.load_state_dict(checkpoint['model_states']['net'])
-            self.optim.load_state_dict(checkpoint['optim_states']['optim'])
+            #self.optim.load_state_dict(checkpoint['optim_states']['optim'])
+            self.enc_optim.load_state_dict(checkpoint['enc_optim_states']['enc_optim'])
+            self.dec_optim.load_state_dict(checkpoint['dec_optim_states']['dec_optim'])
             print("=> loaded checkpoint '{} (iter {})'".format(file_path, self.global_iter))
         else:
             print("=> no checkpoint found at '{}'".format(file_path))
