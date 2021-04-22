@@ -54,3 +54,4 @@ parser.add_argument('--display_step', default=10, type=int,
                     help='number of iterations after which loss data is printed and visdom is updated')
 parser.add_argument('--save_step', default=10, type=int,
                     help='number of iterations after which a checkpoint is saved')
+parser.add_argument('--delta', default=0.01, type=float, help='delta used for epsilon delta posterior collapse visualization')

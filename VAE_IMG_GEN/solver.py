@@ -97,6 +97,7 @@ class Solver(object):
 
         self.gather = DataGather()
         self.gather2 = DataGather()
+        self.delta = args.delta
         self.args = args
 
         if self.is_PID:
