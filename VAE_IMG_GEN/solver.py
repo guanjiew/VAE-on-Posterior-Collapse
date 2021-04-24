@@ -2,6 +2,7 @@ import os
 from tqdm import tqdm
 import torch.cuda
 import torch.optim as optim
+from torch.distributions.normal import Normal
 from torchvision.utils import make_grid, save_image
 import matplotlib.pyplot as plt
 from torch.autograd import Variable
@@ -339,6 +340,42 @@ class Solver(object):
         plt.ylabel('collapse %')
         plt.title('Posterior collapse')
         fig.savefig(os.path.join(output_dir, 'graph_delta_epsilon_collapse_percentage.jpg'))
+        
+        # Mutual information
+        kl1 = None
+        z2 = None
+        for x in self.data_loader:
+            x = Variable(cuda(x, self.use_cuda))
+            _, mean, logvar = self.net(x)
+            logstd = logvar / 2
+            dst = Normal(loc=mean, scale=torch.exp(logstd))
+            z1 = dst.sample((N1,))
+            batch_z2 = torch.cat(list(dst.sample((N2,))))
+            if z2 is None:
+                z2 = batch_z2
+            else:
+                z2 = torch.cat((z2, batch_z2))
+            batch_kl1 = torch.mean(torch.sum(((z1 ** 2 - ((z1 - mean) / torch.exp(logstd)) ** 2) / 2) - logstd, dim=-1), dim=0)
+            if kl1 is None:
+                kl1 = batch_kl1
+            else:
+                kl1 = torch.cat((kl1, batch_kl1))
+        kl1 = torch.mean(kl1)
+
+        kl2 = None
+        for x in self.data_loader:
+            x = Variable(cuda(x, self.use_cuda))
+            _, mean, logvar = self.net(x)
+            logstd = logvar / 2
+            mean = mean.unsqueeze(1)
+            logstd = logstd.unsqueeze(1)
+            batch_kl2 = torch.mean(torch.sum(((z2 ** 2 - ((z2 - mean) / torch.exp(logstd)) ** 2) / 2) - logstd, dim=-1), dim=-1)
+            if kl2 is None:
+                kl2 = batch_kl2
+            else:
+                kl2 = torch.cat((kl2, batch_kl2))
+        kl2 = torch.mean(kl2)
+        print("Mutual information:", (kl1 - kl2).item()) 
 
     def save_checkpoint(self, filename, silent=True):
         model_states = {'net': self.net.state_dict()}
