@@ -11,6 +11,9 @@ import vae_model
 from utils.DataGather import DataGather
 from utils.helper import *
 from preprocess.dataloader import load_data
+from sklearn.manifold import TSNE
+from vae_model.vae_arch import reparametrize
+#import seaborn
 
 
 def cuda(tensor, uses_cuda):
@@ -170,7 +173,7 @@ class Solver(object):
                 x = Variable(cuda(x, self.use_cuda))
 
                 # Strengthen inference network: train encoder more aggressively than decoder
-                sub_iter = 1
+                sub_iter = 0
                 while self.is_aggressive and sub_iter < self.agg_iter and self.model != 'skipvae':
                     print("*** Start Aggressive Training ***")
                     self.enc_optim.zero_grad()
@@ -216,14 +219,9 @@ class Solver(object):
                     if not self.is_aggressive:
                         self.enc_optim.step()
                     self.dec_optim.step()
-                    # Criteria from the paper for setting aggressive to False
-                    # only if all training data has been processed
-                    if self.is_aggressive:
-                        # TODO: replace criteria below with MUTUAL information --> using a validation data batch
-                        # according to paper, mutual info criteria was usually achieved around approx 5 epochs
-                        # running 6 here, at 6, the optimization doesnt lower loss by that much anymore
-                        if self.global_iter > 5:
-                            self.is_aggressive = False
+
+                    # if self.is_aggressive and self.global_iter > 5:
+                    #     self.is_aggressive = False
 
                 # Visualization and Logging
                 if self.viz_on and self.global_iter % self.gather_step == 0:
@@ -247,7 +245,7 @@ class Solver(object):
                     else:
                         self.viz_traverse()
 
-                if self.global_iter % 20 == 0:
+                if self.global_iter % 10 == 0:
                     fw_log.write(
                         '[{}] beta_vae_loss:{:.3f} recon_loss:{:.3f} total_kld:{:.3f} mean_kld:{:.3f} beta:{:.4f}\n'.format(
                             self.global_iter, beta_vae_loss.item(), recon_loss.item(), total_kld.item(),
@@ -296,18 +294,29 @@ class Solver(object):
 
         all_zs_lt_epsilon = torch.zeros(epsilons_size, self.z_dim).to(epsilons.device)
 
+        # For TSNE plots
+        reparamed_zs = None
+        labels = None
         for x in self.data_loader:
             if not self.args.is_classification:
-                x, _ = x
+                x, batch_labels = x
             batch += 1
             x = Variable(cuda(x, self.use_cuda))
             x_recon, mu, logvar = self.net(x)
+            reparamed_z = reparametrize(mu, logvar)
             recon_loss = reconstruction_loss(x, x_recon, self.decoder_dist)
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)  # dim_wise_kld dim = z_dim
 
             fw_log.write('recon_loss:{:.3f} total_kld:{:.3f} mean_kld:{:.3f}\n'.format(
                 recon_loss.item(), total_kld.item(), mean_kld.item()))
             fw_log.flush()
+
+            if reparamed_zs is None:
+                reparamed_zs = reparamed_z
+                labels = batch_labels
+            else:
+                reparamed_zs = torch.cat((reparamed_zs, reparamed_z))
+                labels = torch.cat((labels, batch_labels))
 
             zs_lt_epsilon = dim_wise_kld.repeat(epsilons_size, 1) < rep_epsilons
             all_zs_lt_epsilon += zs_lt_epsilon
@@ -340,13 +349,30 @@ class Solver(object):
         plt.ylabel('collapse %')
         plt.title('Posterior collapse')
         fig.savefig(os.path.join(output_dir, 'graph_delta_epsilon_collapse_percentage.jpg'))
-        
-        # Mutual information
+
+        # TSNE plot
+        tsne_fig = plt.figure(figsize=(10, 10), dpi=300)
+        tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=300)
+        tsne_results = tsne.fit_transform(reparamed_zs.detach().numpy())
+        scatter = plt.scatter(tsne_results[:,0], tsne_results[:,1], c=labels.detach().numpy())
+        plt.legend(*scatter.legend_elements(), title="PathMNIST Classes")
+        plt.title("Image Generation tSNE Projection")
+
+        tsne_fig.savefig(os.path.join(output_dir, 'tsne_projection.jpg'))
+
+        mutual_info_log = os.path.join(self.test_path, "mutual_info.log")
+        self.mutual_information(mutual_info_log)
+
+    def mutual_information(self, log_file, N1=10000, N2=100):
         kl1 = None
         z2 = None
+        batch = 0
         for x in self.data_loader:
+            if not self.args.is_classification:
+                x, _ = x
             x = Variable(cuda(x, self.use_cuda))
             _, mean, logvar = self.net(x)
+
             logstd = logvar / 2
             dst = Normal(loc=mean, scale=torch.exp(logstd))
             z1 = dst.sample((N1,))
@@ -360,10 +386,16 @@ class Solver(object):
                 kl1 = batch_kl1
             else:
                 kl1 = torch.cat((kl1, batch_kl1))
+            batch += 1
+            if batch > 10:
+                break
         kl1 = torch.mean(kl1)
 
         kl2 = None
+        batch = 0
         for x in self.data_loader:
+            if not self.args.is_classification:
+                x, _ = x
             x = Variable(cuda(x, self.use_cuda))
             _, mean, logvar = self.net(x)
             logstd = logvar / 2
@@ -374,8 +406,15 @@ class Solver(object):
                 kl2 = batch_kl2
             else:
                 kl2 = torch.cat((kl2, batch_kl2))
+            batch += 1
+            if batch > 10:
+                break
         kl2 = torch.mean(kl2)
-        print("Mutual information:", (kl1 - kl2).item()) 
+        print("Mutual information:", (kl1 - kl2).item())
+        f_log = open(log_file, "w")
+        f_log.write("Mutual information: {:.3f}".format((kl1 - kl2).item()))
+        f_log.flush()
+        f_log.close()
 
     def save_checkpoint(self, filename, silent=True):
         model_states = {'net': self.net.state_dict()}

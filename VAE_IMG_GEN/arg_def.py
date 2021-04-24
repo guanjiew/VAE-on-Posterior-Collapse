@@ -18,7 +18,7 @@ parser.add_argument('--vae_model', default='betavaeh', type=str,
                     help='vae_model proposed in Higgins et al. or Burgess et al. H/B')
 
 # Hyper parameters
-parser.add_argument('--max_iter', default=2000, type=float, help='maximum training iteration')
+parser.add_argument('--max_iter', default=900, type=float, help='maximum training iteration')
 parser.add_argument('--batch_size', default=16, type=int, help='batch size')
 parser.add_argument('--limit', default=3, type=float, help='traverse limits')
 parser.add_argument('--KL_loss', default=200, type=float, help='KL KL_divergence')
@@ -48,11 +48,12 @@ parser.add_argument('--ckpt_name', default='last', type=str,
 parser.add_argument('--viz_on', default=False, type=str2bool, help='enable visdom visualization')
 parser.add_argument('--viz_name', default='main', type=str, help='visdom env name')
 parser.add_argument('--viz_port', default=8097, type=str, help='visdom port number')
-parser.add_argument('--gather_step', default=10, type=int,
+parser.add_argument('--gather_step', default=9, type=int,
                     help='numer of iterations after which data is gathered for visdom')
-parser.add_argument('--display_step', default=10, type=int,
+parser.add_argument('--display_step', default=9, type=int,
                     help='number of iterations after which loss data is printed and visdom is updated')
-parser.add_argument('--save_step', default=10, type=int,
+parser.add_argument('--save_step', default=450, type=int,
                     help='number of iterations after which a checkpoint is saved')
 parser.add_argument('--delta', default=0.01, type=float, help='delta used for epsilon delta posterior collapse visualization')
 parser.add_argument('--aggressive', default=False, type=bool, help='whether the encoder is trained more aggressively than the decoder')
+parser.add_argument('--agg_iter', default=5, type=int, help='number of times to train the encoder aggressively')
